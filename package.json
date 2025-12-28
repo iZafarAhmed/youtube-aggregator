@@ -1,0 +1,10 @@
+{
+  "name": "youtube-aggregator-api",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
