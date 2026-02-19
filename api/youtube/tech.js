@@ -1,12 +1,20 @@
 // api/youtube/tech.js
-const { TECH_CHANNELS, fetchChannelFeed, dedupe } = require('../../lib/youtubeAggregator');
+const { parseYouTubeFeed } = require('../../lib/youtubeParser');
+
+const TECH_CHANNELS = [
+  { name: "Mrwhosetheboss", id: "UC-lHJZR3Gqxm24_Vd_AJ5Yw" },
+  { name: "Linus Tech Tips", id: "UCsTcErHg8oDvUnTzoqsYeNw" },
+  { name: "The Verge", id: "UC1tVU8H153ZFO9eRsxdJlhA" },
+  { name: "MKBHD", id: "UCBJycsmduvYEL83R_U4JriQ" },
+  { name: "Lawrence Systems", id: "UCHkYOD-3fZbuGhwsADBd9ZQ" },
+  { name: "JerryRigEverything", id: "UCWFKCr40YwOZQx8FHU_ZqqQ" }
+];
 
 let cache = null;
 let cacheTime = 0;
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const CACHE_TTL = 10 * 60 * 1000; // 10 min
 
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
 
@@ -14,50 +22,43 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { limit = 100, source: sourceParam } = req.query;
-  const limitNum = Math.min(Math.max(parseInt(limit) || 100, 1), 200);
-  const sourcesFilter = sourceParam ? sourceParam.split(',').map(s => s.trim()) : null;
-
   try {
-    // Use cache only if it exists and has data
-    if (cache && Date.now() - cacheTime < CACHE_TTL && cache.length > 0) {
-      let results = cache;
-      if (sourcesFilter) {
-        results = results.filter(item => sourcesFilter.includes(item.channel));
+    // Skip cache for first run (or add query ?refresh=true to force)
+    const promises = TECH_CHANNELS.map(async (ch) => {
+      const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${ch.id}`;
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/atom+xml'
+          },
+          timeout: 10000
+        });
+
+        if (!response.ok) {
+          console.warn(`⚠️ ${ch.name}: HTTP ${response.status}`);
+          return [];
+        }
+
+        const xml = await response.text();
+        return parseYouTubeFeed(xml, ch.name);
+      } catch (e) {
+        console.error(`❌ ${ch.name} fetch error:`, e.message);
+        return [];
       }
-      return res.json({
-        total: results.length,
-        items: results.slice(0, limitNum),
-        cached: true,
-        updated_at: new Date(cacheTime).toISOString()
-      });
-    }
+    });
 
-    // Fetch fresh data
-    const promises = TECH_CHANNELS.map(ch => fetchChannelFeed(ch));
     const allItems = (await Promise.all(promises)).flat();
-    const deduped = dedupe(allItems);
-    const sorted = deduped.sort((a, b) => new Date(b.published) - new Date(a.published));
-
-    // Only cache if we have real data
-    if (sorted.length > 0) {
-      cache = sorted;
-      cacheTime = Date.now();
-    }
-
-    let filtered = sorted;
-    if (sourcesFilter) {
-      filtered = sorted.filter(item => sourcesFilter.includes(item.channel));
-    }
+    const deduped = [...new Map(allItems.map(i => [i.videoId, i])).values()]; // dedupe by videoId
 
     res.status(200).json({
-      total: filtered.length,
-      items: filtered.slice(0, limitNum),
+      total: deduped.length,
+      items: deduped,
       cached: false,
       updated_at: new Date().toISOString()
     });
   } catch (e) {
-    console.error('YouTube tech API error:', e);
+    console.error('YouTube API error:', e);
     res.status(500).json({ error: 'Failed to fetch YouTube videos' });
   }
 }
