@@ -6,7 +6,7 @@ let cacheTime = 0;
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 export default async function handler(req, res) {
-  // CORS
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
 
@@ -19,8 +19,8 @@ export default async function handler(req, res) {
   const sourcesFilter = sourceParam ? sourceParam.split(',').map(s => s.trim()) : null;
 
   try {
-    // Use cache if valid
-    if (cache && Date.now() - cacheTime < CACHE_TTL) {
+    // Use cache only if it exists and has data
+    if (cache && Date.now() - cacheTime < CACHE_TTL && cache.length > 0) {
       let results = cache;
       if (sourcesFilter) {
         results = results.filter(item => sourcesFilter.includes(item.channel));
@@ -33,14 +33,17 @@ export default async function handler(req, res) {
       });
     }
 
-    // Fetch fresh
+    // Fetch fresh data
     const promises = TECH_CHANNELS.map(ch => fetchChannelFeed(ch));
     const allItems = (await Promise.all(promises)).flat();
     const deduped = dedupe(allItems);
     const sorted = deduped.sort((a, b) => new Date(b.published) - new Date(a.published));
 
-    cache = sorted;
-    cacheTime = Date.now();
+    // Only cache if we have real data
+    if (sorted.length > 0) {
+      cache = sorted;
+      cacheTime = Date.now();
+    }
 
     let filtered = sorted;
     if (sourcesFilter) {
@@ -54,7 +57,7 @@ export default async function handler(req, res) {
       updated_at: new Date().toISOString()
     });
   } catch (e) {
-    console.error('YouTube aggregation error:', e);
+    console.error('YouTube tech API error:', e);
     res.status(500).json({ error: 'Failed to fetch YouTube videos' });
   }
 }
